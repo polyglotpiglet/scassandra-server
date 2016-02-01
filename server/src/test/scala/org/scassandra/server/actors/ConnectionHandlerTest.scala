@@ -15,7 +15,7 @@
  */
 package org.scassandra.server.actors
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorRef, ActorSystem}
 import akka.io.Tcp.{Received, Write}
 import akka.testkit._
 import akka.util.ByteString
@@ -29,7 +29,7 @@ import org.scassandra.server.RegisterHandlerMessages
 import scala.language.postfixOps
 import scala.concurrent.duration._
 
-class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")) with Matchers with ImplicitSender with FunSuiteLike with BeforeAndAfter {
+class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")) with Matchers with FunSuiteLike with BeforeAndAfter {
 
   var testActorRef : TestActorRef[ConnectionHandler] = null
 
@@ -101,9 +101,12 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
       )
     )
 
+    val senderProbe = TestProbe()
+    implicit val sender = senderProbe.ref
+
     testActorRef ! Received(readyMessage)
 
-    expectMsg(Ready(0x0.toByte))
+    senderProbe.expectMsg(Ready(0x0.toByte))
   }
 
   test("Should send ready message when startup message sent - version two") {
@@ -115,9 +118,12 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
       )
     )
 
+    val senderProbe = TestProbe()
+    implicit val sender: ActorRef = senderProbe.ref
+
     testActorRef ! Received(readyMessage)
 
-    expectMsg(Ready(0x0.toByte))
+    senderProbe.expectMsg(Ready(0x0.toByte))
   }
 
   test("Should send back error if query before ready message") {
@@ -129,9 +135,12 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
       )
     )
 
+    val senderProbe = TestProbe()
+    implicit val sender: ActorRef = senderProbe.ref
+
     testActorRef ! Received(queryMessage)
 
-    expectMsg(Write(QueryBeforeReadyMessage().serialize()))
+    senderProbe.expectMsg(Write(QueryBeforeReadyMessage().serialize()))
   }
 
   test("Should do nothing if an unrecognised opcode") {
@@ -261,6 +270,8 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
 
     val twoMessages: List[Byte] = startupMessage ++ queryMessage
 
+    implicit val sender = TestProbe().ref
+
     testActorRef ! Received(ByteString(twoMessages.toArray))
 
     queryHandlerTestProbe.expectMsg(Query(ByteString(queryWithLengthAndOptions), stream))
@@ -272,10 +283,12 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
     val headerForPrepareMessage = new Header(ProtocolVersion.ClientProtocolVersionTwo,
                                              OpCodes.Prepare, streamId)
     val emptyPrepareMessage = headerForPrepareMessage.serialize() ++ Array[Byte](0,0,0,0)
-    
+
+    implicit val sender = TestProbe().ref
+
     testActorRef ! Received(ByteString(emptyPrepareMessage))
 
-    prepareHandlerTestProbe.expectMsg(PrepareHandler.Prepare(ByteString(), streamId, VersionTwoMessageFactory, self))
+    prepareHandlerTestProbe.expectMsg(PrepareHandler.Prepare(ByteString(), streamId, VersionTwoMessageFactory, sender))
   }
 
   test("Should forward Execute messages to the execute handler") {
@@ -287,9 +300,11 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
     val emptyPrepareMessage = headerForPrepareMessage.serialize() ++
       Array[Byte](0,0,0,messageBody.length.toByte) ++ messageBody
 
+    implicit val sender = TestProbe().ref
+
     testActorRef ! Received(ByteString(emptyPrepareMessage))
 
-    executeHandlerTestProbe.expectMsg(ExecuteHandler.Execute(ByteString(messageBody), streamId, VersionTwoMessageFactory, self))
+    executeHandlerTestProbe.expectMsg(ExecuteHandler.Execute(ByteString(messageBody), streamId, VersionTwoMessageFactory, sender))
   }
 
   test("Should forward Batch messages to the batch handler") {
@@ -308,16 +323,19 @@ class ConnectionHandlerTest extends TestKit(ActorSystem("ConnectionHandlerTest")
     val stream : Byte = 0x0 // hard coded for now
     val startupMessage = MessageHelper.createStartupMessage(VersionThree)
 
+    val senderProbe = TestProbe()
+    implicit val sender = senderProbe.ref
+
     testActorRef ! Received(ByteString(startupMessage.toArray))
 
-    expectMsg(UnsupportedProtocolVersion(stream))
+    senderProbe.expectMsg(UnsupportedProtocolVersion(stream))
 
     case object VersionFive extends ProtocolVersion(0x5, (0x85 & 0xFF).toByte, 5)
     val v5StartupMessage = MessageHelper.createStartupMessage(VersionFive)
 
     testActorRef ! Received(ByteString(v5StartupMessage.toArray))
 
-    expectMsg(UnsupportedProtocolVersion(stream))
+    senderProbe.expectMsg(UnsupportedProtocolVersion(stream))
   }
 
   private def sendStartupMessage(protocolVersion: ProtocolVersion = VersionTwo) = {
